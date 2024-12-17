@@ -1,14 +1,13 @@
-// incomplete and untested implementation of the Roundcube tester
-
 package webmailtester
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
+	"strings"
 	"time"
 
 	"github.com/dniminenn/mailmetrix/config"
@@ -58,23 +57,22 @@ func (r *RoundcubeTester) login() error {
 	start := time.Now()
 
 	loginURL := fmt.Sprintf("%s/?_task=login", r.cfg.BaseURL)
+	formData := fmt.Sprintf("_task=login&_action=login&_user=%s&_pass=%s", r.cfg.Username, r.cfg.Password)
 
-	formData := map[string]string{
-		"_task":   "login",
-		"_action": "login",
-		"_user":   r.cfg.Username,
-		"_pass":   r.cfg.Password,
+	// TTFB Tracking
+	var ttfb time.Duration
+	trace := &httptrace.ClientTrace{
+		GotFirstResponseByte: func() {
+			ttfb = time.Since(start)
+			webmailTTFB.WithLabelValues(r.cfg.Name).Set(ttfb.Seconds())
+		},
 	}
-	formBody := make([]byte, 0)
-	for key, value := range formData {
-		formBody = append(formBody, []byte(fmt.Sprintf("%s=%s&", key, value))...)
-	}
-	formBody = formBody[:len(formBody)-1]
 
-	req, err := http.NewRequest("POST", loginURL, bytes.NewReader(formBody))
+	req, err := http.NewRequest("POST", loginURL, strings.NewReader(formData))
 	if err != nil {
 		return fmt.Errorf("failed to create login request: %w", err)
 	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := r.client.Do(req)
@@ -88,9 +86,11 @@ func (r *RoundcubeTester) login() error {
 		return fmt.Errorf("login failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// incomplete session management
-	r.sessionID = resp.Header.Get("Set-Cookie")
+	r.sessionID = extractSessionID(resp.Header)
 	r.authToken = extractAuthToken(resp.Body)
+	if r.sessionID == "" || r.authToken == "" {
+		return fmt.Errorf("failed to retrieve session ID or auth token")
+	}
 
 	loginDuration := time.Since(start)
 	webmailLoginTime.WithLabelValues(r.cfg.Name).Set(loginDuration.Seconds())
@@ -99,7 +99,6 @@ func (r *RoundcubeTester) login() error {
 
 func (r *RoundcubeTester) testListing() error {
 	start := time.Now()
-
 	listURL := fmt.Sprintf("%s/?_task=mail&_action=list", r.cfg.BaseURL)
 
 	req, err := http.NewRequest("GET", listURL, nil)
@@ -109,6 +108,15 @@ func (r *RoundcubeTester) testListing() error {
 
 	req.Header.Set("Cookie", r.sessionID)
 	req.Header.Set("X-Roundcube-Auth", r.authToken)
+
+	var ttfb time.Duration
+	trace := &httptrace.ClientTrace{
+		GotFirstResponseByte: func() {
+			ttfb = time.Since(start)
+			webmailTTFB.WithLabelValues(r.cfg.Name).Set(ttfb.Seconds())
+		},
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 
 	resp, err := r.client.Do(req)
 	if err != nil {
@@ -121,14 +129,13 @@ func (r *RoundcubeTester) testListing() error {
 		return fmt.Errorf("listing failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	listingDuration := time.Since(start)
-	webmailFirstPageTime.WithLabelValues(r.cfg.Name).Set(listingDuration.Seconds())
+	listDuration := time.Since(start)
+	webmailFirstPageTime.WithLabelValues(r.cfg.Name).Set(listDuration.Seconds())
 	return nil
 }
 
 func (r *RoundcubeTester) testMessageLoad() error {
 	start := time.Now()
-
 	loadURL := fmt.Sprintf("%s/?_task=mail&_action=preview&_uid=1", r.cfg.BaseURL)
 
 	req, err := http.NewRequest("GET", loadURL, nil)
@@ -138,6 +145,15 @@ func (r *RoundcubeTester) testMessageLoad() error {
 
 	req.Header.Set("Cookie", r.sessionID)
 	req.Header.Set("X-Roundcube-Auth", r.authToken)
+
+	var ttfb time.Duration
+	trace := &httptrace.ClientTrace{
+		GotFirstResponseByte: func() {
+			ttfb = time.Since(start)
+			webmailTTFB.WithLabelValues(r.cfg.Name).Set(ttfb.Seconds())
+		},
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 
 	resp, err := r.client.Do(req)
 	if err != nil {
@@ -155,9 +171,17 @@ func (r *RoundcubeTester) testMessageLoad() error {
 	return nil
 }
 
-// Helper function to extract the auth token from the response body
+func extractSessionID(header http.Header) string {
+	cookies := header["Set-Cookie"]
+	for _, cookie := range cookies {
+		if strings.Contains(cookie, "roundcube_sessid") {
+			return strings.Split(cookie, ";")[0]
+		}
+	}
+	return ""
+}
+
 func extractAuthToken(body io.Reader) string {
-	// incomplete implementation
 	var result map[string]interface{}
 	if err := json.NewDecoder(body).Decode(&result); err == nil {
 		if token, ok := result["request_token"].(string); ok {
