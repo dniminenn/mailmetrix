@@ -179,12 +179,12 @@ func (t *Tester) RunSession(ctx context.Context) {
 	}
 	defer t.cleanup()
 
-	if err := t.FetchTest(ctx); err != nil {
-		log.Printf("[IMAP] Fetch test failed: %v", err)
-	}
-
 	if err := t.AppendTest(ctx); err != nil {
 		log.Printf("[IMAP] Append test failed: %v", err)
+	}
+
+	if err := t.FetchTest(ctx); err != nil {
+		log.Printf("[IMAP] Fetch test failed: %v", err)
 	}
 }
 
