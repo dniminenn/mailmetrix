@@ -1,0 +1,19 @@
+imap:
+    servers:
+        - name: "ExampleIMAP"
+          host: mail.example.com
+          port: 993
+          username: test@example.com
+          password: supersecret
+
+webmail:
+    servers:
+        - name: "ExampleWebmail"
+          type: "roundcube"
+          base_url: "https://webmail.example.com"
+          username: test@example.com
+          password: supersecret
+
+metrics:
+    prometheus_port: 9090
+    test_interval: 30
