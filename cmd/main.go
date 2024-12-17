@@ -70,55 +70,13 @@ func main() {
 	}
 }
 
-func runIMAPTests(ctx context.Context, imapTesters []*imaptester.Tester,
-	lock chan struct{}, testInterval time.Duration) {
-	select {
-	case lock <- struct{}{}:
-		defer func() { <-lock }()
-
-		timeout := testInterval * 3
-
-		testCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-
-		var wg sync.WaitGroup
-		for _, tester := range imapTesters {
-			wg.Add(1)
-			go func(t *imaptester.Tester) {
-				defer wg.Done()
-				// Run test with timeout-aware context
-				done := make(chan struct{})
-				go func() {
-					t.RunSession(testCtx)
-					close(done)
-				}()
-
-				select {
-				case <-done:
-					// Test completed successfully
-					return
-				case <-testCtx.Done():
-					// Timeout or cancellation occurred
-					log.Printf("IMAP test for server %s timed out", t.GetName())
-				}
-			}(tester)
-		}
-
-		wg.Wait()
-	default:
-		log.Println("IMAP tests are still running, skipping this iteration.")
-	}
-}
-
 func runWebmailTests(ctx context.Context, webmailTesters []webmailtester.WebmailTester,
 	lock chan struct{}, testInterval time.Duration) {
 	select {
 	case lock <- struct{}{}:
 		defer func() { <-lock }()
 
-		timeout := testInterval * 3
-
-		testCtx, cancel := context.WithTimeout(ctx, timeout)
+		ctx, cancel := context.WithTimeout(ctx, testInterval*3)
 		defer cancel()
 
 		var wg sync.WaitGroup
@@ -126,26 +84,64 @@ func runWebmailTests(ctx context.Context, webmailTesters []webmailtester.Webmail
 			wg.Add(1)
 			go func(t webmailtester.WebmailTester) {
 				defer wg.Done()
-				// Run test with timeout-aware context
-				done := make(chan struct{})
-				go func() {
-					t.RunSession(testCtx)
-					close(done)
-				}()
-
-				select {
-				case <-done:
-					// Test completed successfully
-					return
-				case <-testCtx.Done():
-					// Timeout or cancellation occurred
-					log.Printf("Webmail test for server %s timed out", t.GetName())
+				if err := t.RunSession(ctx); err != nil {
+					log.Printf("Webmail test for server %s failed: %v", t.GetName(), err)
 				}
 			}(tester)
 		}
 
-		wg.Wait()
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			log.Printf("Webmail tests timed out")
+			return
+		}
 	default:
 		log.Println("Webmail tests are still running, skipping this iteration.")
+	}
+}
+
+func runIMAPTests(ctx context.Context, imapTesters []*imaptester.Tester,
+	lock chan struct{}, testInterval time.Duration) {
+	select {
+	case lock <- struct{}{}:
+		defer func() { <-lock }()
+
+		ctx, cancel := context.WithTimeout(ctx, testInterval*3)
+		defer cancel()
+
+		var wg sync.WaitGroup
+		for _, tester := range imapTesters {
+			wg.Add(1)
+			go func(t *imaptester.Tester) {
+				defer wg.Done()
+				if err := t.RunSession(ctx); err != nil {
+					log.Printf("IMAP test for server %s failed: %v", t.GetName(), err)
+				}
+			}(tester)
+		}
+
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			log.Printf("IMAP tests timed out")
+			return
+		}
+	default:
+		log.Println("IMAP tests are still running, skipping this iteration.")
 	}
 }

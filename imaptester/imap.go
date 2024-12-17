@@ -163,21 +163,38 @@ func (t *Tester) cleanupTestMessage() error {
 	return nil
 }
 
-func (t *Tester) RunSession(ctx context.Context) {
-	if err := t.Authenticate(); err != nil {
-		log.Printf("[IMAP] Authentication failed: %v", err)
-		return
-	}
+func (t *Tester) RunSession(ctx context.Context) error {
+	errChan := make(chan error, 1)
 
-	if err := t.AppendTest(ctx); err != nil {
-		log.Printf("[IMAP] Append test failed: %v", err)
-	}
+	go func() {
+		if err := t.Authenticate(); err != nil {
+			errChan <- fmt.Errorf("authentication failed: %w", err)
+			return
+		}
+		defer func() {
+			if c := t.client.Swap(nil); c != nil {
+				c.Logout()
+			}
+		}()
+		if err := t.AppendTest(ctx); err != nil {
+			errChan <- fmt.Errorf("append test failed: %w", err)
+			return
+		}
 
-	if err := t.FetchTest(ctx); err != nil {
-		log.Printf("[IMAP] Fetch test failed: %v", err)
-	}
+		if err := t.FetchTest(ctx); err != nil {
+			errChan <- fmt.Errorf("fetch test failed: %w", err)
+			return
+		}
+		errChan <- nil
+	}()
 
-	if c := t.client.Swap(nil); c != nil {
-		c.Logout()
+	select {
+	case err := <-errChan:
+		return err
+	case <-ctx.Done():
+		if c := t.client.Swap(nil); c != nil {
+			c.Logout()
+		}
+		return fmt.Errorf("session timed out: %w", ctx.Err())
 	}
 }

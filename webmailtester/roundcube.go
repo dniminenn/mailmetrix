@@ -38,18 +38,43 @@ func init() {
 	Register("roundcube", NewRoundcubeTester)
 }
 
-func (r *RoundcubeTester) RunSession(ctx context.Context) {
-	if err := r.login(); err != nil {
-		webmailErrors.WithLabelValues(r.cfg.Name, "login").Inc()
-		return
-	}
+func (r *RoundcubeTester) RunSession(ctx context.Context) error {
+	errChan := make(chan error, 1)
 
-	if err := r.testListing(); err != nil {
-		webmailErrors.WithLabelValues(r.cfg.Name, "listing").Inc()
-	}
+	go func() {
+		if err := r.login(); err != nil {
+			errChan <- fmt.Errorf("login failed: %w", err)
+			webmailErrors.WithLabelValues(r.cfg.Name, "login").Inc()
+			return
+		}
 
-	if err := r.testMessageLoad(); err != nil {
-		webmailErrors.WithLabelValues(r.cfg.Name, "loading").Inc()
+		defer func() {
+			r.sessionID = ""
+			r.authToken = ""
+		}()
+
+		if err := r.testListing(); err != nil {
+			errChan <- fmt.Errorf("listing test failed: %w", err)
+			webmailErrors.WithLabelValues(r.cfg.Name, "listing").Inc()
+			return
+		}
+
+		if err := r.testMessageLoad(); err != nil {
+			errChan <- fmt.Errorf("message load test failed: %w", err)
+			webmailErrors.WithLabelValues(r.cfg.Name, "loading").Inc()
+			return
+		}
+
+		errChan <- nil
+	}()
+
+	select {
+	case err := <-errChan:
+		return err
+	case <-ctx.Done():
+		r.sessionID = ""
+		r.authToken = ""
+		return fmt.Errorf("roundcube session timed out: %w", ctx.Err())
 	}
 }
 

@@ -8,8 +8,8 @@ import (
 )
 
 type WebmailTester interface {
+	RunSession(context.Context) error
 	GetName() string
-	RunSession(ctx context.Context)
 }
 
 var testers = make(map[string]func(cfg config.WebmailServerConfig) WebmailTester)
