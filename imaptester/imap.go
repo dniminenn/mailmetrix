@@ -137,7 +137,6 @@ func (t *Tester) cleanupTestMessage() error {
 		return fmt.Errorf("no active connection")
 	}
 
-	start := time.Now()
 	mbox, err := c.Select("INBOX", false)
 	if err != nil {
 		return fmt.Errorf("cleanup select failed: %w", err)
@@ -155,6 +154,7 @@ func (t *Tester) cleanupTestMessage() error {
 		return fmt.Errorf("failed to mark messages as deleted: %w", err)
 	}
 
+	start := time.Now()
 	if err := c.Expunge(nil); err != nil {
 		return fmt.Errorf("failed to expunge messages: %w", err)
 	}
