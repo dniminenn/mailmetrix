@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -28,6 +29,36 @@ func NewTester(cfg config.ServerConfig) *Tester {
 	return &Tester{cfg: cfg}
 }
 
+// If we don't clean up stale metrics, Prometheus will keep reporting the last value indefinitely.
+func (t *Tester) handleFailure(operation string, err error) {
+	log.Printf("[ERROR] %s failed for %s: %v", operation, t.cfg.Name, err)
+	imapFailures.WithLabelValues(t.cfg.Name, operation).Inc()
+	t.resetMetricsForOperation(operation)
+}
+
+func (t *Tester) resetMetricsForOperation(operation string) {
+	switch operation {
+	case "authentication":
+		timeToAuth.WithLabelValues(t.cfg.Name).Set(math.NaN())
+	case "fetch":
+		timeToFetch.WithLabelValues(t.cfg.Name).Set(math.NaN())
+	case "append":
+		timeToAppend.WithLabelValues(t.cfg.Name).Set(math.NaN())
+	case "expunge":
+		timeToExpunge.WithLabelValues(t.cfg.Name).Set(math.NaN())
+	case "banner":
+		timeToBanner.WithLabelValues(t.cfg.Name).Set(math.NaN())
+	case "session":
+		timeToAuth.WithLabelValues(t.cfg.Name).Set(math.NaN())
+		timeToFetch.WithLabelValues(t.cfg.Name).Set(math.NaN())
+		timeToAppend.WithLabelValues(t.cfg.Name).Set(math.NaN())
+		timeToExpunge.WithLabelValues(t.cfg.Name).Set(math.NaN())
+		timeToBanner.WithLabelValues(t.cfg.Name).Set(math.NaN())
+	}
+}
+
+// Authenticate establishes a connection to the IMAP server and logs in with the provided credentials.
+// It automatically falls back to plaintext if the server does not support TLS.
 func (t *Tester) Authenticate() error {
 	if t.client.Load() != nil {
 		return fmt.Errorf("connection already exists")
@@ -49,6 +80,7 @@ func (t *Tester) Authenticate() error {
 	if err != nil {
 		conn, err = dialer.Dial("tcp", address)
 		if err != nil {
+			t.handleFailure("banner", err)
 			return fmt.Errorf("failed to connect to %s: %w", address, err)
 		}
 	}
@@ -56,12 +88,14 @@ func (t *Tester) Authenticate() error {
 	start := time.Now()
 	c, err := client.New(conn)
 	if err != nil {
+		t.handleFailure("banner", err)
 		return fmt.Errorf("failed to initialize IMAP client: %w", err)
 	}
 	timeToBanner.WithLabelValues(t.cfg.Name).Set(time.Since(start).Seconds())
 
 	start = time.Now()
 	if err = c.Login(t.cfg.Username, t.cfg.Password); err != nil {
+		t.handleFailure("authentication", err)
 		c.Logout()
 		return fmt.Errorf("login failed: %w", err)
 	}
@@ -71,20 +105,25 @@ func (t *Tester) Authenticate() error {
 	return nil
 }
 
+// FetchTest selects the INBOX and fetches an envelope for each message.
 func (t *Tester) FetchTest(ctx context.Context) error {
 	c := t.client.Load()
 	if c == nil {
-		return fmt.Errorf("no active connection")
+		err := fmt.Errorf("no active connection")
+		t.handleFailure("fetch", err)
+		return err
 	}
 
 	start := time.Now()
 	mbox, err := c.Select("INBOX", false)
 	if err != nil {
+		t.handleFailure("fetch", err)
 		return fmt.Errorf("failed to select INBOX: %w", err)
 	}
 
 	if mbox.Messages == 0 {
 		log.Println("[IMAP] No messages in INBOX")
+		timeToFetch.WithLabelValues(t.cfg.Name).Set(0)
 		return nil
 	}
 
@@ -103,6 +142,7 @@ func (t *Tester) FetchTest(ctx context.Context) error {
 	}
 
 	if err := <-done; err != nil {
+		t.handleFailure("fetch", err)
 		return fmt.Errorf("fetch failed: %w", err)
 	}
 
@@ -110,10 +150,13 @@ func (t *Tester) FetchTest(ctx context.Context) error {
 	return nil
 }
 
+// AppendTest appends a test message to the INBOX.
 func (t *Tester) AppendTest(ctx context.Context) error {
 	c := t.client.Load()
 	if c == nil {
-		return fmt.Errorf("no active connection")
+		err := fmt.Errorf("no active connection")
+		t.handleFailure("append", err)
+		return err
 	}
 
 	start := time.Now()
@@ -124,6 +167,7 @@ func (t *Tester) AppendTest(ctx context.Context) error {
 		"This is a test message for IMAP testing purposes.\r\n"
 
 	if err := c.Append("INBOX", nil, time.Now(), strings.NewReader(testMessage)); err != nil {
+		t.handleFailure("append", err)
 		return fmt.Errorf("append failed: %w", err)
 	}
 
@@ -134,11 +178,14 @@ func (t *Tester) AppendTest(ctx context.Context) error {
 func (t *Tester) cleanupTestMessage() error {
 	c := t.client.Load()
 	if c == nil {
-		return fmt.Errorf("no active connection")
+		err := fmt.Errorf("no active connection")
+		t.handleFailure("expunge", err)
+		return err
 	}
 
 	mbox, err := c.Select("INBOX", false)
 	if err != nil {
+		t.handleFailure("expunge", err)
 		return fmt.Errorf("cleanup select failed: %w", err)
 	}
 
@@ -151,11 +198,13 @@ func (t *Tester) cleanupTestMessage() error {
 	seqSet.AddRange(1, mbox.Messages-1)
 
 	if err := c.Store(seqSet, imap.FormatFlagsOp(imap.AddFlags, true), []interface{}{imap.DeletedFlag}, nil); err != nil {
+		t.handleFailure("expunge", err)
 		return fmt.Errorf("failed to mark messages as deleted: %w", err)
 	}
 
 	start := time.Now()
 	if err := c.Expunge(nil); err != nil {
+		t.handleFailure("expunge", err)
 		return fmt.Errorf("failed to expunge messages: %w", err)
 	}
 
@@ -163,6 +212,7 @@ func (t *Tester) cleanupTestMessage() error {
 	return nil
 }
 
+// RunSession runs the IMAP test session.
 func (t *Tester) RunSession(ctx context.Context) error {
 	errChan := make(chan error, 1)
 
@@ -195,6 +245,8 @@ func (t *Tester) RunSession(ctx context.Context) error {
 		if c := t.client.Swap(nil); c != nil {
 			c.Logout()
 		}
-		return fmt.Errorf("session timed out: %w", ctx.Err())
+		err := fmt.Errorf("session timed out: %w", ctx.Err())
+		t.handleFailure("session", err)
+		return err
 	}
 }

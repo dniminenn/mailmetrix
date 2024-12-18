@@ -30,11 +30,12 @@ type WebmailConfig struct {
 }
 
 type WebmailServerConfig struct {
-	Name     string `mapstructure:"name"`
-	Type     string `mapstructure:"type"`
-	BaseURL  string `mapstructure:"base_url"`
-	Username string `mapstructure:"username"`
-	Password string `mapstructure:"password"`
+	Name      string `mapstructure:"name"`
+	Type      string `mapstructure:"type"`
+	UserAgent string `mapstructure:"user_agent"`
+	BaseURL   string `mapstructure:"base_url"`
+	Username  string `mapstructure:"username"`
+	Password  string `mapstructure:"password"`
 }
 
 type MetricsConfig struct {

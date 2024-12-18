@@ -47,6 +47,14 @@ var (
 		},
 		[]string{"server"},
 	)
+	imapFailures = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name:      "imap_failures_total",
+			Help:      "Total number of IMAP operation failures",
+			Namespace: "mailmetrix",
+		},
+		[]string{"server", "operation"},
+	)
 )
 
 func init() {
@@ -56,6 +64,7 @@ func init() {
 		timeToFetch,
 		timeToAppend,
 		timeToExpunge,
+		imapFailures,
 	}
 
 	for _, metric := range metrics {

@@ -45,6 +45,14 @@ var (
 		},
 		[]string{"server", "type"},
 	)
+	webmailFailures = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name:      "webmail_failures_total",
+			Help:      "Total number of webmail operation failures",
+			Namespace: "mailmetrix",
+		},
+		[]string{"server", "operation"},
+	)
 )
 
 func init() {

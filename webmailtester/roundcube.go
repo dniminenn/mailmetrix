@@ -95,6 +95,7 @@ func (r *RoundcubeTester) login() error {
 
 	req, err := http.NewRequest("POST", loginURL, strings.NewReader(formData))
 	if err != nil {
+		handleFailure(r.cfg.Name, "login", err)
 		return fmt.Errorf("failed to create login request: %w", err)
 	}
 	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
@@ -102,19 +103,23 @@ func (r *RoundcubeTester) login() error {
 
 	resp, err := r.client.Do(req)
 	if err != nil {
+		handleFailure(r.cfg.Name, "login", err)
 		return fmt.Errorf("login request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		handleFailure(r.cfg.Name, "login", fmt.Errorf("status code: %d, body: %s", resp.StatusCode, string(body)))
 		return fmt.Errorf("login failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	r.sessionID = extractSessionID(resp.Header)
 	r.authToken = extractAuthToken(resp.Body)
 	if r.sessionID == "" || r.authToken == "" {
-		return fmt.Errorf("failed to retrieve session ID or auth token")
+		err := fmt.Errorf("failed to retrieve session ID or auth token")
+		handleFailure(r.cfg.Name, "login", err)
+		return err
 	}
 
 	loginDuration := time.Since(start)
@@ -128,6 +133,7 @@ func (r *RoundcubeTester) testListing() error {
 
 	req, err := http.NewRequest("GET", listURL, nil)
 	if err != nil {
+		handleFailure(r.cfg.Name, "listing", err)
 		return fmt.Errorf("failed to create list request: %w", err)
 	}
 
@@ -145,12 +151,14 @@ func (r *RoundcubeTester) testListing() error {
 
 	resp, err := r.client.Do(req)
 	if err != nil {
+		handleFailure(r.cfg.Name, "listing", err)
 		return fmt.Errorf("list request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		handleFailure(r.cfg.Name, "listing", fmt.Errorf("status code: %d, body: %s", resp.StatusCode, string(body)))
 		return fmt.Errorf("listing failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -165,6 +173,7 @@ func (r *RoundcubeTester) testMessageLoad() error {
 
 	req, err := http.NewRequest("GET", loadURL, nil)
 	if err != nil {
+		handleFailure(r.cfg.Name, "loading", err)
 		return fmt.Errorf("failed to create message load request: %w", err)
 	}
 
@@ -182,12 +191,14 @@ func (r *RoundcubeTester) testMessageLoad() error {
 
 	resp, err := r.client.Do(req)
 	if err != nil {
+		handleFailure(r.cfg.Name, "loading", err)
 		return fmt.Errorf("message load request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		handleFailure(r.cfg.Name, "loading", fmt.Errorf("status code: %d, body: %s", resp.StatusCode, string(body)))
 		return fmt.Errorf("message load failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
